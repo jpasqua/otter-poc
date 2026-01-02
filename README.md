@@ -4,9 +4,11 @@
 <image src="assets/icon.png" width="35%"> <image src="assets/OTTER_UI.png" width="50%" align="right">
 ## Overview
 
-This repository contains a read-only proof-of-concept (PoC) for OTTER, a free and open-source, transcript-driven audio editor. Using an automatic speech recognition (ASR) model, OTTER will allow users to edit audio files by editing text rather than solely via waveform editors.
+This repository contains a Proof of Concept (PoC) for OTTER, the **O**pen **T**ext **T**ranscription **E**diting **R**esource. It is for use with CSUMB Computer Science Capstone Program.
 
-This PoC demonstrates how text transcription, audio playback, and timeline synchronization can work together with no cloud services or closed-source dependencies. It is implemented as a local desktop app using Electron, with a JavaScript-based UI and a locally invoked transcription backend.
+OTTER uses an automatic speech recognition (ASR) model to allow users to edit audio files by editing text rather than solely via waveform editors.
+
+The PoC demonstrates how text transcription, audio playback, and timeline synchronization can work together with no cloud services or closed-source dependencies. It is implemented as a local desktop app using Electron, with a JavaScript-based UI and a locally invoked transcription backend. Audio and text never leave the user's computer so it remains private.
 
 It exists to:
 
@@ -16,9 +18,10 @@ It exists to:
 + Highlight real technical tradeoffs
 
 It is:
-+ Not able to make any edits whatsoever - not even adjusting the word-to-audio mapping
-+ Not thoroughly tested or documented
-+ Not production-ready code!
+
++ **Not** able to make any edits whatsoever - not even adjusting the word-to-audio mapping
++ **Not** thoroughly tested or documented
++ **Not** production-ready code!
 
 ## Scope
 
