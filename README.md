@@ -89,6 +89,13 @@ Students are encouraged to explore broader format support (e.g., MP3, AAC, norma
 
 ### Installation & Running
 
+1. Clone the repository
+
+	```
+	git clone https://github.com/jpasqua/otter-poc.git
+	cd otter-poc
+	```
+
 1. Install Node dependencies
 
 	```
