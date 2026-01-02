@@ -49,8 +49,8 @@ dist/
 snippets/
 *.tmp
 
-# Transcription artifacts (if generated during runs)
-*.json
+# Transcription artifacts (generated during runs) — keep this scoped
+transcripts/
 
 ###############################################################################
 # OS / Editor noise
