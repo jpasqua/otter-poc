@@ -27,7 +27,7 @@ main {
 }
 
 .wavePane { padding: 12px; border-right: 1px solid #ddd; }
-#waveform { height: 230px; border: 1px solid #ddd; border-radius: 8px; }
+#waveform { height: 90; border: 1px solid #ddd; border-radius: 8px; }
 .transport { margin-top: 10px; display: flex; gap: 12px; align-items: center; }
 #waveDetailPane {
   padding-top: 2em;
@@ -36,7 +36,7 @@ main {
    */
   --word-region-color: rgba(0, 200, 0, 0.35);
 }
-#waveDetail { height: 90; border: 1px solid #ddd; border-radius: 8px; }
+#waveDetail { height: 230; border: 1px solid #ddd; border-radius: 8px; }
 .wavePane {
   
 }
