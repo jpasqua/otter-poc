@@ -157,4 +157,13 @@ contextBridge.exposeInMainWorld("otter", {
   readDefaultSpec: (): Promise<string> =>
     ipcRenderer.invoke("read-spec-file", "default_spec.json"),
 
+  /**
+   * Persist recorded audio to a temp WAV file and return the resulting path.
+   *
+   * The renderer captures audio in a browser-friendly format; main normalizes it
+   * into a WAV file so the existing pipeline can treat it like any other source.
+   */
+  saveRecordedAudio: (audioData: ArrayBuffer, mimeType: string): Promise<string> =>
+    ipcRenderer.invoke("save-recorded-audio", audioData, mimeType),
+
 });

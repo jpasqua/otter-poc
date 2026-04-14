@@ -12,6 +12,7 @@
 
       <button id="btnChoose">Choose Audio…</button>
       <button id="btnTranscribe" disabled>Transcribe</button>
+      <button id="btnRecord">Record Audio</button>
 
       <div class="statusArea">
         <div id="status"></div>
@@ -69,6 +70,35 @@
           </div>
         </div>
 
+        <section id="recordPanel" class="recordPanel" hidden>
+          <div class="recordHeader">
+            <div>
+              <div class="recordTitle">Record New Audio</div>
+              <div id="recordHint" class="recordHint">
+                New recording will be transcribed and appended to the end of the transcript.
+              </div>
+            </div>
+            <span id="recordState" class="recordState idle">Idle</span>
+          </div>
+
+          <div class="recordBody">
+            <div class="recordControls">
+              <button id="btnRecordStart">Start Recording</button>
+              <button id="btnRecordStop" disabled>Stop</button>
+              <button id="btnRecordDiscard" disabled>Discard</button>
+              <button id="btnRecordRetry" disabled>Record Again</button>
+              <button id="btnRecordTranscribe" disabled>Transcribe &amp; Append</button>
+            </div>
+
+            <div class="recordMeta">
+              <span class="recordMetaLabel">Elapsed</span>
+              <span id="recordTimer" class="numericReadout">00:00</span>
+            </div>
+
+            <audio id="recordPreview" controls hidden></audio>
+          </div>
+        </section>
+
         <!-- Developer Panel (collapsed by default) -->
         <details id="devPanel" class="devPanel">
           <summary>
@@ -109,6 +139,7 @@
       <section class="textPane">
         <div class="paneTitle">Transcript</div>
         <div id="transcript"></div>
+        <div id="appendTranscript" class="appendTranscript" hidden></div>
       </section>
     </main>
 

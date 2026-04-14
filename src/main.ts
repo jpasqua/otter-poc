@@ -340,3 +340,55 @@ ipcMain.handle(
 
   return outPath;
 });
+
+ipcMain.handle(
+  "save-recorded-audio",
+  async (
+    _event: IpcMainInvokeEvent,
+    audioData: ArrayBuffer,
+    mimeType: string
+  ) => {
+  const recordingsDir = path.join(app.getPath("userData"), "recordings");
+  fs.mkdirSync(recordingsDir, { recursive: true });
+
+  const stamp = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const sourceExt = (() => {
+    const normalized = (mimeType || "").toLowerCase();
+    if (normalized.includes("ogg")) return "ogg";
+    if (normalized.includes("mp4") || normalized.includes("m4a")) return "m4a";
+    if (normalized.includes("wav")) return "wav";
+    return "webm";
+  })();
+
+  const sourcePath = path.join(recordingsDir, `recording_${stamp}.${sourceExt}`);
+  const wavPath = path.join(recordingsDir, `recording_${stamp}.wav`);
+
+  fs.writeFileSync(sourcePath, Buffer.from(audioData));
+
+  if (sourceExt === "wav") {
+    return sourcePath;
+  }
+
+  const args = [
+    "-hide_banner",
+    "-y",
+    "-i", sourcePath,
+    "-ac", "1",
+    "-c:a", "pcm_s16le",
+    wavPath
+  ];
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("ffmpeg", args);
+
+    let err = "";
+    child.stderr.on("data", (d: Buffer) => err += d.toString());
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg failed (${code}): ${err}`));
+    });
+  });
+
+  return wavPath;
+});

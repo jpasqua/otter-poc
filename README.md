@@ -8,7 +8,7 @@ This repository contains a Proof of Concept (PoC) for OTTER, the **O**pen **T**e
 
 OTTER uses an automatic speech recognition (ASR) model to allow users to edit audio files by editing text rather than solely via waveform editors.
 
-The PoC demonstrates how text transcription, audio playback, and timeline synchronization can work together with no cloud services or closed-source dependencies. It is implemented as a local desktop app using Electron, with a JavaScript-based UI and a locally invoked transcription backend. Audio and text never leave the user's computer so it remains private.
+The PoC demonstrates how text transcription, audio playback, timeline synchronization, and simple microphone capture can work together with no cloud services or closed-source dependencies. It is implemented as a local desktop app using Electron, with a JavaScript-based UI and a locally invoked transcription backend. Audio and text never leave the user's computer so it remains private.
 
 It exists to:
 
@@ -40,6 +40,8 @@ The purpose of this application is to demonstrate:
 	+ Playback highlights the current word in the transcript.
 	+ Audio is displayed using a waveform view synchronized with playback.
 	+ Waveform visualization to fine-tune selections
+	+ Microphone recording with review-before-transcribe workflow
+	+ Appending newly recorded transcript content to the end of the transcript
 + Architecture
 	+ Electron architecture
 	+ Separation of concerns between:
@@ -59,6 +61,7 @@ To keep the focus clear, this prototype does not attempt to:
 + Support all audio formats
 + Package into a self-contained application
 + Provide a polished end-user experience
++ Integrate appended recordings into the original source-audio timeline
 
 These are deliberate omissions and are appropriate topics for the full capstone project. The Capstone Proposal can be found here: [doc/OTTER Proposal v1](OTTER\ Proposal.pdf). 
 
@@ -98,12 +101,12 @@ In this example we converted a format commonly produced by Apple devices into a 
 + Node.js (v18+ recommended)
 + Python 3.10+
 + [Electron](https://www.electronjs.org)
-+ [faster-whisper](https://pypi.org/project/faster-whisper/) for text transcription
-+ [whisperx](https://pypi.org/project/whisperx/) for text transcription
++ [faster-whisper](https://pypi.org/project/faster-whisper/) for the default text transcription pipeline
++ [whisperx](https://pypi.org/project/whisperx/) for optional alternate transcription pipelines
 + [pydash](https://pypi.org/project/pydash/)
 + [FFmpeg](https://ffmpeg.org):
 	+ Used for audio inspection and (optionally) format normalization
-	+ Also used indirectly by waveform rendering and audio decoding
+	+ Also used indirectly by waveform rendering, audio decoding, and recorded-audio normalization
 	+ Must be available on the system PATH
 
 **Security note:** Electron is pinned to `^35.7.5` to address a moderate security advisory affecting earlier versions. Newer versions may be used at the discretion of the Capstone team.
@@ -127,11 +130,10 @@ In this example we converted a format commonly produced by Apple devices into a 
 2. Set up Python environment
 
 	```
-	python3 -m venv .venv
+	python3.12 -m venv .venv
 	source .venv/bin/activate
-	pip install pydash
-	pip install faster-whisper
-	pip install whisperx
+	python -m pip install --upgrade pip
+	pip install pydash faster-whisper whisperx
 	```
 
 3. Install `ffmpeg`
@@ -163,10 +165,16 @@ In this example we converted a format commonly produced by Apple devices into a 
 1. Shift-click extends the selection to create a range of words.
 1. Use the detail view to fine-tune the mapping to the selected range
 1. During playback, a separate playhead highlight moves word-by-word and does not change the selection.
+1. To append new spoken content:
+   + Click Record Audio
+   + Start and stop a microphone recording
+   + Preview the take, then click Transcribe & Append
+   + The new transcript text will appear in an Appended Recordings section at the end of the transcript
+1. Appended recordings are shown as appended transcript content only in this PoC; they are not yet merged into the original waveform timeline.
 1. Developer Tools
     + Use the Developer Tools to look at the log from the transcription pipeline
 	+ Select a pre-configured transcription pipeline or enter a custom specification.
-	+ If no explicit selection is made, a default pipeline will be used.
+	+ If no explicit selection is made, the default `faster_whisper` pipeline will be used.
 	+ All pipelines are stored in `otter_py/sample_specs`. Any `json` file placed in that folder will be presented as a pipeline specification in the app
 
 ## Architectural Notes

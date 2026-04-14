@@ -62,6 +62,14 @@ type TranscribeSpec =
   | { mode: "file"; name: string }
   | { mode: "json"; jsonText: string };
 
+type AppendedTranscriptTake = {
+  id: string;
+  label: string;
+  words: TranscriptWord[];
+};
+
+type RecordUiState = "idle" | "recording" | "preview" | "processing";
+
 type OtterApi = {
   chooseAudioFile: () => Promise<string | null>;
   transcribeAudio: (audioPath: string, spec?: TranscribeSpec) => Promise<TranscriptResult>;
@@ -73,6 +81,7 @@ type OtterApi = {
   listSpecFiles: () => Promise<string[]>;
   readSpecFile: (name: string) => Promise<string>;
   readDefaultSpec: () => Promise<string>;
+  saveRecordedAudio: (audioData: ArrayBuffer, mimeType: string) => Promise<string>;
 };
 
 declare global {
@@ -97,11 +106,22 @@ const WaveSurfer = window.WaveSurfer as any;
 const otter = window.otter;
 
 let audioPath: string | null = null;
-let words: TranscriptWord[] = [];
+let sourceWords: TranscriptWord[] = [];
+let appendedTakes: AppendedTranscriptTake[] = [];
 let selectionStart: number | null = null;
 let selectionEnd: number | null = null;
 let selectionAnchor: number | null = null;
 let playheadIndex = -1;
+let recordUiState: RecordUiState = "idle";
+let micStream: MediaStream | null = null;
+let mediaRecorder: MediaRecorder | null = null;
+let recordingTimer: ReturnType<typeof setInterval> | null = null;
+let recordingStartedAt = 0;
+let recordedChunks: Blob[] = [];
+let recordedBlob: Blob | null = null;
+let recordedMimeType = "";
+let recordedObjectUrl: string | null = null;
+let appendedTakeCounter = 0;
 
 //
 // Utility Functions
@@ -115,6 +135,13 @@ function getCssVar(el: HTMLElement | null, name: string, fallback: string) {
 // Format seconds as 0.00 (or choose your preferred format)
 function fmtSec(x: number) {
   return Number(x).toFixed(2);
+}
+
+function fmtClock(totalSeconds: number) {
+  const whole = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(whole / 60);
+  const seconds = whole % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function setStatus(text: string, cls = "info") {
@@ -163,8 +190,10 @@ function mustGetEl<T extends HTMLElement>(id: string): T {
 //==============================================================================
 
 const transcriptEl = mustGetEl<HTMLDivElement>("transcript");
+const appendTranscriptEl = mustGetEl<HTMLDivElement>("appendTranscript");
 const btnChoose = mustGetEl<HTMLButtonElement>("btnChoose");
 const btnTranscribe = mustGetEl<HTMLButtonElement>("btnTranscribe");
+const btnRecord = mustGetEl<HTMLButtonElement>("btnRecord");
 const statusEl = mustGetEl<HTMLDivElement>("status");
 
 function normalizeRange(a: number, b: number) {
@@ -293,7 +322,7 @@ async function loadDetailForRange(start: number, end: number) {
  * @param {Array<Object>} words - Transcript words with timing metadata
  *                                (each entry includes at least { word, start, end })
  */
-function renderTranscript(words: TranscriptWord[]) {
+function renderSourceTranscript(words: TranscriptWord[]) {
   transcriptEl.innerHTML = "";
 
   for (let i = 0; i < words.length; i++) {
@@ -347,6 +376,44 @@ function renderTranscript(words: TranscriptWord[]) {
   }
 }
 
+function renderAppendedTranscript() {
+  appendTranscriptEl.innerHTML = "";
+  appendTranscriptEl.hidden = appendedTakes.length === 0;
+  if (appendedTakes.length === 0) return;
+
+  const title = document.createElement("div");
+  title.className = "appendTranscriptTitle";
+  title.textContent = "Appended Recordings";
+  appendTranscriptEl.appendChild(title);
+
+  for (const take of appendedTakes) {
+    const block = document.createElement("section");
+    block.className = "appendTranscriptBlock";
+
+    const label = document.createElement("div");
+    label.className = "appendTranscriptLabel";
+    label.textContent = take.label;
+    block.appendChild(label);
+
+    const text = document.createElement("div");
+    text.className = "appendTranscriptText";
+
+    for (const w of take.words) {
+      const span = document.createElement("span");
+      span.textContent = w.word + " ";
+      text.appendChild(span);
+    }
+
+    block.appendChild(text);
+    appendTranscriptEl.appendChild(block);
+  }
+}
+
+function renderAllTranscript() {
+  renderSourceTranscript(sourceWords);
+  renderAppendedTranscript();
+}
+
 //==============================================================================
 //
 // BEGIN: Objects and code related to the Wave Pane
@@ -357,6 +424,16 @@ const btnPlay = mustGetEl<HTMLButtonElement>("btnPlay");
 const timeEl = mustGetEl<HTMLSpanElement>("time");
 const progressEl = mustGetEl<HTMLProgressElement>("transcribeProgress");
 const fnameEl = mustGetEl<HTMLSpanElement>("loadedFile");
+const recordPanelEl = mustGetEl<HTMLDivElement>("recordPanel");
+const recordStateEl = mustGetEl<HTMLSpanElement>("recordState");
+const recordHintEl = mustGetEl<HTMLDivElement>("recordHint");
+const recordTimerEl = mustGetEl<HTMLSpanElement>("recordTimer");
+const recordPreviewEl = mustGetEl<HTMLAudioElement>("recordPreview");
+const btnRecordStart = mustGetEl<HTMLButtonElement>("btnRecordStart");
+const btnRecordStop = mustGetEl<HTMLButtonElement>("btnRecordStop");
+const btnRecordDiscard = mustGetEl<HTMLButtonElement>("btnRecordDiscard");
+const btnRecordRetry = mustGetEl<HTMLButtonElement>("btnRecordRetry");
+const btnRecordTranscribe = mustGetEl<HTMLButtonElement>("btnRecordTranscribe");
 
 // Switch between play and pause icons
 function setPlayIcon(isPlaying: boolean) {
@@ -407,11 +484,164 @@ ws.on("timeupdate", (t: number) => {
   // We use a simple linear scan for this PoC, but
   // a real implementation should be smarter (e.g. binary search)
   let idx = -1;
-  for (let i = 0; i < words.length; i++) {
-    if (te >= words[i].start && te < words[i].end) { idx = i; break; }
+  for (let i = 0; i < sourceWords.length; i++) {
+    if (te >= sourceWords[i].start && te < sourceWords[i].end) { idx = i; break; }
   }
   setPlayheadIndex(idx);
 });
+
+function setRecordUiState(next: RecordUiState, detail?: string) {
+  recordUiState = next;
+  recordStateEl.className = `recordState ${next}`;
+
+  if (next === "recording") recordStateEl.textContent = "Recording";
+  else if (next === "preview") recordStateEl.textContent = "Ready";
+  else if (next === "processing") recordStateEl.textContent = "Working";
+  else recordStateEl.textContent = "Idle";
+
+  if (detail) {
+    recordHintEl.textContent = detail;
+  } else if (next === "recording") {
+    recordHintEl.textContent = "Recording from the microphone. Stop when the take sounds right.";
+  } else if (next === "preview") {
+    recordHintEl.textContent = "Preview the take, then transcribe and append it to the transcript.";
+  } else if (next === "processing") {
+    recordHintEl.textContent = "Saving the recording and running transcription...";
+  } else {
+    recordHintEl.textContent = "New recording will be transcribed and appended to the end of the transcript.";
+  }
+
+  btnRecordStart.disabled = next === "recording" || next === "processing";
+  btnRecordStop.disabled = next !== "recording";
+  btnRecordDiscard.disabled = next === "recording" || next === "processing" || !recordedBlob;
+  btnRecordRetry.disabled = next === "recording" || next === "processing" || !recordedBlob;
+  btnRecordTranscribe.disabled = next !== "preview" || !recordedBlob;
+}
+
+function updateRecordTimer() {
+  if (recordUiState !== "recording") {
+    recordTimerEl.textContent = "00:00";
+    return;
+  }
+
+  const elapsedSec = (Date.now() - recordingStartedAt) / 1000;
+  recordTimerEl.textContent = fmtClock(elapsedSec);
+}
+
+function clearRecordingTimer() {
+  if (recordingTimer) {
+    clearInterval(recordingTimer);
+    recordingTimer = null;
+  }
+}
+
+function resetRecordedPreview() {
+  if (recordedObjectUrl) {
+    URL.revokeObjectURL(recordedObjectUrl);
+    recordedObjectUrl = null;
+  }
+
+  recordedBlob = null;
+  recordedChunks = [];
+  recordedMimeType = "";
+  recordPreviewEl.pause();
+  recordPreviewEl.removeAttribute("src");
+  recordPreviewEl.load();
+  recordPreviewEl.hidden = true;
+}
+
+function resetRecordingSession() {
+  clearRecordingTimer();
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.ondataavailable = null;
+    mediaRecorder.onstop = null;
+    mediaRecorder.stop();
+  }
+  mediaRecorder = null;
+  resetRecordedPreview();
+  setRecordUiState("idle");
+}
+
+function chooseRecordingMimeType() {
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/mp4"
+  ];
+
+  if (typeof MediaRecorder === "undefined") return "";
+  for (const mimeType of candidates) {
+    if (MediaRecorder.isTypeSupported(mimeType)) return mimeType;
+  }
+  return "";
+}
+
+async function ensureMicStream() {
+  if (micStream?.active) return micStream;
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true
+    }
+  });
+  return micStream;
+}
+
+async function startRecording() {
+  if (!audioPath || sourceWords.length === 0) {
+    setStatus("Transcribe the source audio before appending a new recording.", "error");
+    return;
+  }
+
+  recordPanelEl.hidden = false;
+
+  try {
+    const stream = await ensureMicStream();
+    clearRecordingTimer();
+    resetRecordedPreview();
+
+    recordedChunks = [];
+    recordedMimeType = chooseRecordingMimeType();
+    mediaRecorder = recordedMimeType
+      ? new MediaRecorder(stream, { mimeType: recordedMimeType })
+      : new MediaRecorder(stream);
+
+    mediaRecorder.ondataavailable = (event: BlobEvent) => {
+      if (event.data.size > 0) recordedChunks.push(event.data);
+    };
+
+    mediaRecorder.onstop = () => {
+      const mimeType = mediaRecorder?.mimeType || recordedMimeType || "audio/webm";
+      recordedMimeType = mimeType;
+      recordedBlob = new Blob(recordedChunks, { type: mimeType });
+
+      if (recordedObjectUrl) URL.revokeObjectURL(recordedObjectUrl);
+      recordedObjectUrl = URL.createObjectURL(recordedBlob);
+      recordPreviewEl.src = recordedObjectUrl;
+      recordPreviewEl.hidden = false;
+      clearRecordingTimer();
+      setRecordUiState("preview");
+    };
+
+    mediaRecorder.start();
+    recordingStartedAt = Date.now();
+    updateRecordTimer();
+    recordingTimer = setInterval(updateRecordTimer, 250);
+    setRecordUiState("recording");
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    setStatus("Microphone access failed.", "error");
+    appendLog(`\nERROR:\nUnable to start recording: ${msg}\n`);
+    setRecordUiState("idle", "Microphone access is required to record audio.");
+  }
+}
+
+function stopRecording() {
+  if (!mediaRecorder || mediaRecorder.state !== "recording") return;
+  mediaRecorder.stop();
+}
 
 
 //==============================================================================
@@ -602,6 +832,7 @@ function setDetailPlayIcon(isPlaying: boolean) {
 btnTranscribe.addEventListener("click", async () => {
   if (!audioPath) return;
   btnTranscribe.disabled = true;
+  btnRecord.disabled = true;
   setStatus("Preparing to transcribe...", "info");
   appendLog("\n=== Transcription started ===\n");
 
@@ -612,11 +843,14 @@ btnTranscribe.addEventListener("click", async () => {
     progressEl.hidden = false;
 
     const result = await otter.transcribeAudio(audioPath, getActiveSpecArg());
-    words = Array.isArray(result) ? result : (result.words || []);
+    sourceWords = Array.isArray(result) ? result : (result.words || []);
+    appendedTakes = [];
+    appendedTakeCounter = 0;
     const lang = Array.isArray(result) ? undefined : result.language;
     const langSuffix = lang ? `, lang=${lang}` : "";
-    setStatus(`Transcript ready (${words.length} words${langSuffix})`, "success");
-    renderTranscript(words);
+    setStatus(`Transcript ready (${sourceWords.length} words${langSuffix})`, "success");
+    renderAllTranscript();
+    btnRecord.disabled = false;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     setStatus("Transcription failed (see logs).", "error");
@@ -624,15 +858,22 @@ btnTranscribe.addEventListener("click", async () => {
   } finally {
     btnChoose.disabled = false;
     btnTranscribe.disabled = false;
+    btnRecord.disabled = sourceWords.length === 0;
     progressEl.hidden = true;
   }
 });
 
 // Handle the "Choose File" button
 btnChoose.addEventListener("click", async () => {
-  transcriptEl.innerHTML = "";
+  sourceWords = [];
+  appendedTakes = [];
+  appendedTakeCounter = 0;
+  renderAllTranscript();
   logEl.textContent = "";
   setStatus("Choosing file…", "info");
+  btnRecord.disabled = true;
+  resetRecordingSession();
+  recordPanelEl.hidden = true;
 
   audioPath = await otter.chooseAudioFile();
   if (!audioPath) {
@@ -656,6 +897,74 @@ btnChoose.addEventListener("click", async () => {
   btnPlay.disabled = false;
 
   fnameEl.textContent = shortenFilenameMiddle(fname);
+});
+
+btnRecord.addEventListener("click", () => {
+  if (!audioPath || sourceWords.length === 0) {
+    setStatus("Transcribe the source audio before appending a new recording.", "error");
+    return;
+  }
+
+  recordPanelEl.hidden = false;
+  setRecordUiState("idle");
+});
+
+btnRecordStart.addEventListener("click", async () => {
+  await startRecording();
+});
+
+btnRecordStop.addEventListener("click", () => {
+  stopRecording();
+});
+
+btnRecordDiscard.addEventListener("click", () => {
+  resetRecordedPreview();
+  setRecordUiState("idle");
+});
+
+btnRecordRetry.addEventListener("click", async () => {
+  await startRecording();
+});
+
+btnRecordTranscribe.addEventListener("click", async () => {
+  if (!recordedBlob) return;
+
+  setRecordUiState("processing");
+  progressEl.value = 0;
+  progressEl.hidden = false;
+  btnChoose.disabled = true;
+  btnTranscribe.disabled = true;
+  btnRecord.disabled = true;
+  appendLog("\n=== Recording transcription started ===\n");
+
+  try {
+    const arrayBuffer = await recordedBlob.arrayBuffer();
+    const recordedPath = await otter.saveRecordedAudio(arrayBuffer, recordedMimeType || recordedBlob.type || "audio/webm");
+    const result = await otter.transcribeAudio(recordedPath, getActiveSpecArg());
+    const takeWords = Array.isArray(result) ? result : (result.words || []);
+
+    appendedTakeCounter += 1;
+    appendedTakes.push({
+      id: `take-${appendedTakeCounter}`,
+      label: `Recording ${appendedTakeCounter}`,
+      words: takeWords
+    });
+
+    renderAppendedTranscript();
+    setStatus(`Appended recording ${appendedTakeCounter} (${takeWords.length} words).`, "success");
+    resetRecordedPreview();
+    setRecordUiState("idle", "Recording appended. You can record another take at any time.");
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    setStatus("Recording transcription failed (see logs).", "error");
+    appendLog("\nERROR:\n" + msg + "\n");
+    setRecordUiState("preview", "Preview the take again or retry transcription.");
+  } finally {
+    btnChoose.disabled = false;
+    btnTranscribe.disabled = false;
+    btnRecord.disabled = sourceWords.length === 0;
+    progressEl.hidden = true;
+  }
 });
 
 
@@ -824,8 +1133,24 @@ export {};
 setDetailPlayIcon(false);
 btnDetailPlay.disabled = true;
 btnRegion.disabled = true;
+btnRecord.disabled = true;
+recordPanelEl.hidden = true;
+appendTranscriptEl.hidden = true;
+setRecordUiState("idle");
+renderAllTranscript();
 const WORD_REGION_COLOR = getCssVar(
   waveDetailPane,
   "--word-region-color",
   "rgba(255, 200, 0, 0.35)"
 );
+
+window.addEventListener("beforeunload", () => {
+  clearRecordingTimer();
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.ondataavailable = null;
+    mediaRecorder.onstop = null;
+    mediaRecorder.stop();
+  }
+  micStream?.getTracks().forEach((track) => track.stop());
+  if (recordedObjectUrl) URL.revokeObjectURL(recordedObjectUrl);
+});
